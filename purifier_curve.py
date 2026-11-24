@@ -22,6 +22,7 @@ ENV_FILE = HERE / ".env"
 CURVE_FILE = HERE / "curve.toml"
 
 MIN_LEVEL, MAX_LEVEL = 0, 14
+EXCLUDED_LEVELS = frozenset({7})
 MODE_FAVORITE = 2
 MODE_NAMES = {0: "auto", 1: "sleep", 2: "favorite"}
 
@@ -51,7 +52,21 @@ def level_for(pm25, points):
             if x0 <= pm25 <= x1:
                 level = y0 + (y1 - y0) * (pm25 - x0) / (x1 - x0)
                 break
-    return max(MIN_LEVEL, min(MAX_LEVEL, round(level)))
+    level = max(MIN_LEVEL, min(MAX_LEVEL, round(level)))
+    return _avoid_excluded_levels(level)
+
+
+def _avoid_excluded_levels(level, excluded_levels=EXCLUDED_LEVELS):
+    """Choose the next allowed level up, falling back down at the device maximum."""
+    if level not in excluded_levels:
+        return level
+    for candidate in range(level + 1, MAX_LEVEL + 1):
+        if candidate not in excluded_levels:
+            return candidate
+    for candidate in range(level - 1, MIN_LEVEL - 1, -1):
+        if candidate not in excluded_levels:
+            return candidate
+    raise ValueError("all fan levels are excluded")
 
 
 class Controller:

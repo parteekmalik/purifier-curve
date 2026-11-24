@@ -8,6 +8,7 @@ The stock Auto mode treats PM2.5 up to 35 µg/m³ as "good" and idles the fan, s
 
 - Polls the purifier every few seconds over the local miIO protocol.
 - Picks a fan level from the points in `curve.toml`, interpolating between them.
+- Never emits excluded levels (configured by `EXCLUDED_LEVELS` in the script); it picks the next higher allowed level, or falls back lower at the maximum. Level 7 (50%) is excluded by default.
 - Speeds up immediately when air gets worse; slows down only after the lower level has held for a while, so the fan doesn't hunt.
 - Keeps the purifier in **Favorite** mode, where the fan level can be set directly. If it's switched to Auto or Sleep (button or app), the script switches it back and applies the curve right away. To use another mode, stop the script.
 - Never turns the purifier on: turning it off pauses the curve until it's turned back on.

@@ -1,4 +1,4 @@
-from purifier_curve import Controller, level_for, pick_purifier, set_env_value, tick
+from purifier_curve import Controller, _avoid_excluded_levels, level_for, pick_purifier, set_env_value, tick
 
 POINTS = [(5, 2), (12, 5), (25, 9), (35, 12), (50, 14)]
 
@@ -23,6 +23,18 @@ def test_interpolates_between_points():
     assert level_for(30, POINTS) in (10, 11)
     # 3/7 of the way from (5, 2) to (12, 5) -> 3.29 -> 3
     assert level_for(8, POINTS) == 3
+
+
+def test_never_returns_excluded_level_7():
+    assert level_for(18, [(12, 5), (25, 9)]) == 8
+
+
+def test_skips_consecutive_excluded_levels():
+    assert _avoid_excluded_levels(7, {7, 8}) == 9
+
+
+def test_falls_back_to_lower_level_when_all_higher_levels_are_excluded():
+    assert _avoid_excluded_levels(13, {13, 14}) == 12
 
 
 def test_unsorted_points_are_handled():

@@ -9,7 +9,8 @@ The stock Auto mode treats PM2.5 up to 35 µg/m³ as "good" and idles the fan, s
 - Polls the purifier every few seconds over the local miIO protocol.
 - Picks a fan level from the points in `curve.toml`, interpolating between them.
 - Speeds up immediately when air gets worse; slows down only after the lower level has held for a while, so the fan doesn't hunt.
-- Only acts while the purifier is in **Favorite** mode. Switch to Auto or Sleep (button or app) and it steps aside; it never turns the purifier on.
+- Keeps the purifier in **Favorite** mode, where the fan level can be set directly. If it's switched to Auto or Sleep (button or app), the script switches it back and applies the curve right away. To use another mode, stop the script.
+- Never turns the purifier on: turning it off pauses the curve until it's turned back on.
 - Finds the purifier on the network by itself, and finds it again if its IP changes.
 
 ## Setup
@@ -29,7 +30,7 @@ The stock Auto mode treats PM2.5 up to 35 µg/m³ as "good" and idles the fan, s
 ### Finding the device
 
 `discover` sends a Xiaomi "hello" broadcast on the local network, then confirms each reply by checking it accepts your token and reports a 4 Compact model, so other Xiaomi devices are ignored. The IP is saved to `.env`. You never need to run it by hand: `status` and `run` discover automatically when no IP is set, and `run` searches again after 3 failed reads in a row. Reserving the IP in your router is still a good idea, but no longer required.
-4. Put the purifier in Favorite mode and run the curve:
+4. Run the curve (it switches the purifier to Favorite mode itself):
    ```bash
    uv run purifier_curve.py run
    ```

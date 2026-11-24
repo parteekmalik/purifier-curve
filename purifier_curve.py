@@ -196,11 +196,43 @@ class Purifier:
             values[item["did"]] = item["value"]
         return values
 
-    def set_level(self, level):
-        s, p = PROPS["level"]
-        result = self.dev.send("set_properties", [{"did": "level", "siid": s, "piid": p, "value": level}])
+    def _set(self, name, value):
+        s, p = PROPS[name]
+        result = self.dev.send("set_properties", [{"did": name, "siid": s, "piid": p, "value": value}])
         if result[0].get("code") != 0:
-            raise RuntimeError(f"setting level failed with code {result[0].get('code')}")
+            raise RuntimeError(f"setting {name} failed with code {result[0].get('code')}")
+
+    def set_level(self, level):
+        self._set("level", level)
+
+    def set_mode(self, mode):
+        self._set("mode", mode)
+
+
+def tick(purifier, controller, points, now):
+    """One control cycle: force Favorite mode if needed, then apply the curve. Returns log messages.
+
+    Never turns the purifier on; turning it off is how you stop the curve.
+    """
+    v = purifier.read()
+    if not v["power"]:
+        controller.reset()
+        return ["purifier is off; waiting for it to be turned on"]
+
+    msgs = []
+    target = level_for(v["pm25"], points)
+    if v["mode"] != MODE_FAVORITE:
+        purifier.set_mode(MODE_FAVORITE)
+        msgs.append(f"switched mode {MODE_NAMES.get(v['mode'], v['mode'])} -> favorite")
+        controller.reset()
+        new_level = target if target != v["level"] else None
+    else:
+        new_level = controller.decide(target, v["level"], now)
+
+    if new_level is not None:
+        purifier.set_level(new_level)
+        msgs.append(f"pm2.5={v['pm25']} level {v['level']} -> {new_level}")
+    return msgs
 
 
 def describe(v):
@@ -260,8 +292,8 @@ def cmd_run():
     purifier, token = connect()
     points, poll, step_down = load_curve()
     controller = Controller(step_down)
-    log(f"started: curve={points} poll={poll}s step_down_after={step_down}s")
-    last_state = None
+    log(f"started at {purifier.ip}: curve={points} poll={poll}s step_down_after={step_down}s")
+    last_msgs = None
     failures = 0
 
     while True:
@@ -271,7 +303,7 @@ def cmd_run():
             log(f"curve.toml invalid, keeping previous curve: {e}")
 
         try:
-            v = purifier.read()
+            msgs = tick(purifier, controller, points, time.monotonic())
             failures = 0
         except Exception as e:
             failures += 1
@@ -285,28 +317,10 @@ def cmd_run():
             time.sleep(min(poll * failures, 120))
             continue
 
-        if not v["power"] or v["mode"] != MODE_FAVORITE:
-            state = "off" if not v["power"] else MODE_NAMES.get(v["mode"], v["mode"])
-            if state != last_state:
-                log(f"paused (purifier is {state}); switch to favorite mode to use the curve")
-            last_state = state
-            controller.reset()
-            time.sleep(poll)
-            continue
-
-        if last_state != "active":
-            log(f"active: {describe(v)}")
-            last_state = "active"
-
-        target = level_for(v["pm25"], points)
-        new_level = controller.decide(target, v["level"], time.monotonic())
-        if new_level is not None:
-            try:
-                purifier.set_level(new_level)
-                log(f"pm2.5={v['pm25']} level {v['level']} -> {new_level}")
-            except Exception as e:
-                log(f"failed to set level {new_level}: {e}")
-
+        if msgs != last_msgs:
+            for m in msgs:
+                log(m)
+        last_msgs = msgs
         time.sleep(poll)
 
 

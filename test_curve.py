@@ -1,4 +1,4 @@
-from purifier_curve import Controller, level_for, pick_purifier, set_env_value
+from purifier_curve import Controller, level_for, pick_purifier, set_env_value, tick
 
 POINTS = [(5, 2), (12, 5), (25, 9), (35, 12), (50, 14)]
 
@@ -98,3 +98,60 @@ def test_set_env_value_replaces_existing_line_and_keeps_the_rest():
 def test_set_env_value_appends_when_missing():
     assert set_env_value("PURIFIER_TOKEN=abc\n", "PURIFIER_IP", "10.0.0.3") == "PURIFIER_TOKEN=abc\nPURIFIER_IP=10.0.0.3\n"
     assert set_env_value("PURIFIER_TOKEN=abc", "PURIFIER_IP", "10.0.0.3") == "PURIFIER_TOKEN=abc\nPURIFIER_IP=10.0.0.3\n"
+
+
+class FakePurifier:
+    def __init__(self, power=True, mode=2, pm25=30, level=5):
+        self.v = {"power": power, "mode": mode, "pm25": pm25, "level": level}
+        self.calls = []
+
+    def read(self):
+        return dict(self.v)
+
+    def set_mode(self, mode):
+        self.calls.append(("mode", mode))
+        self.v["mode"] = mode
+
+    def set_level(self, level):
+        self.calls.append(("level", level))
+        self.v["level"] = level
+
+
+def test_tick_forces_favorite_from_auto_and_applies_curve_immediately():
+    dev = FakePurifier(mode=0, pm25=35, level=3)
+    tick(dev, Controller(step_down_after=60), POINTS, now=0)
+    assert dev.calls == [("mode", 2), ("level", 12)]
+
+
+def test_tick_forces_favorite_from_sleep_even_when_curve_wants_lower_level():
+    dev = FakePurifier(mode=1, pm25=5, level=10)
+    tick(dev, Controller(step_down_after=60), POINTS, now=0)
+    assert dev.calls == [("mode", 2), ("level", 2)]
+
+
+def test_tick_never_turns_purifier_on():
+    dev = FakePurifier(power=False, mode=0)
+    tick(dev, Controller(step_down_after=60), POINTS, now=0)
+    assert dev.calls == []
+
+
+def test_tick_in_favorite_only_changes_level():
+    dev = FakePurifier(mode=2, pm25=35, level=3)
+    tick(dev, Controller(step_down_after=60), POINTS, now=0)
+    assert dev.calls == [("level", 12)]
+
+
+def test_tick_in_favorite_waits_before_stepping_down():
+    dev = FakePurifier(mode=2, pm25=5, level=10)
+    c = Controller(step_down_after=60)
+    tick(dev, c, POINTS, now=0)
+    assert dev.calls == []
+    tick(dev, c, POINTS, now=60)
+    assert dev.calls == [("level", 2)]
+
+
+def test_tick_returns_messages_describing_changes():
+    dev = FakePurifier(mode=0, pm25=35, level=3)
+    msgs = tick(dev, Controller(step_down_after=60), POINTS, now=0)
+    assert any("auto" in m and "favorite" in m for m in msgs)
+    assert any("3 -> 12" in m for m in msgs)

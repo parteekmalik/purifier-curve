@@ -17,3 +17,7 @@ poll_seconds = 10
 # Speeds up immediately when air gets worse, but only slows down after
 # the lower speed has been called for this many seconds in a row.
 step_down_after_seconds = 60
+
+# Beep/click on button presses and speed changes. The script keeps it this way,
+# even if it's turned back on in the app.
+sound = false

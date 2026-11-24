@@ -101,8 +101,8 @@ def test_set_env_value_appends_when_missing():
 
 
 class FakePurifier:
-    def __init__(self, power=True, mode=2, pm25=30, level=5):
-        self.v = {"power": power, "mode": mode, "pm25": pm25, "level": level}
+    def __init__(self, power=True, mode=2, pm25=30, level=5, sound=False):
+        self.v = {"power": power, "mode": mode, "pm25": pm25, "level": level, "sound": sound}
         self.calls = []
 
     def read(self):
@@ -115,6 +115,10 @@ class FakePurifier:
     def set_level(self, level):
         self.calls.append(("level", level))
         self.v["level"] = level
+
+    def set_sound(self, on):
+        self.calls.append(("sound", on))
+        self.v["sound"] = on
 
 
 def test_tick_forces_favorite_from_auto_and_applies_curve_immediately():
@@ -155,3 +159,28 @@ def test_tick_returns_messages_describing_changes():
     msgs = tick(dev, Controller(step_down_after=60), POINTS, now=0)
     assert any("auto" in m and "favorite" in m for m in msgs)
     assert any("3 -> 12" in m for m in msgs)
+
+
+def test_tick_turns_sound_off_before_changing_level():
+    dev = FakePurifier(mode=2, pm25=35, level=3, sound=True)
+    msgs = tick(dev, Controller(step_down_after=60), POINTS, now=0)
+    assert dev.calls == [("sound", False), ("level", 12)]
+    assert any("sound" in m for m in msgs)
+
+
+def test_tick_leaves_sound_alone_when_already_off():
+    dev = FakePurifier(mode=2, pm25=30, level=11, sound=False)
+    tick(dev, Controller(step_down_after=60), POINTS, now=0)
+    assert ("sound", False) not in dev.calls
+
+
+def test_tick_can_keep_sound_on_when_configured():
+    dev = FakePurifier(mode=2, pm25=35, level=12, sound=True)
+    tick(dev, Controller(step_down_after=60), POINTS, now=0, sound=True)
+    assert dev.calls == []
+
+
+def test_tick_does_not_touch_sound_while_off():
+    dev = FakePurifier(power=False, sound=True)
+    tick(dev, Controller(step_down_after=60), POINTS, now=0)
+    assert dev.calls == []

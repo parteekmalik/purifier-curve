@@ -35,6 +35,7 @@ PROPS = {
     "mode": (2, 4),
     "pm25": (3, 4),
     "level": (9, 11),
+    "sound": (6, 1),
 }
 
 
@@ -176,7 +177,7 @@ def load_curve():
     points = [tuple(p) for p in cfg["points"]]
     if len(points) < 2:
         raise ValueError("curve.toml needs at least two points")
-    return points, cfg.get("poll_seconds", 10), cfg.get("step_down_after_seconds", 60)
+    return points, cfg.get("poll_seconds", 10), cfg.get("step_down_after_seconds", 60), bool(cfg.get("sound", False))
 
 
 class Purifier:
@@ -208,9 +209,13 @@ class Purifier:
     def set_mode(self, mode):
         self._set("mode", mode)
 
+    def set_sound(self, on):
+        self._set("sound", on)
 
-def tick(purifier, controller, points, now):
-    """One control cycle: force Favorite mode if needed, then apply the curve. Returns log messages.
+
+def tick(purifier, controller, points, now, sound=False):
+    """One control cycle: enforce the sound setting and Favorite mode, then apply the curve.
+    Returns log messages.
 
     Never turns the purifier on; turning it off is how you stop the curve.
     """
@@ -220,6 +225,10 @@ def tick(purifier, controller, points, now):
         return ["purifier is off; waiting for it to be turned on"]
 
     msgs = []
+    if v["sound"] != sound:
+        purifier.set_sound(sound)
+        msgs.append(f"sound {'on' if v['sound'] else 'off'} -> {'on' if sound else 'off'}")
+
     target = level_for(v["pm25"], points)
     if v["mode"] != MODE_FAVORITE:
         purifier.set_mode(MODE_FAVORITE)
@@ -238,7 +247,7 @@ def tick(purifier, controller, points, now):
 def describe(v):
     return (
         f"power={'on' if v['power'] else 'off'} mode={MODE_NAMES.get(v['mode'], v['mode'])} "
-        f"pm2.5={v['pm25']} level={v['level']}"
+        f"pm2.5={v['pm25']} level={v['level']} sound={'on' if v['sound'] else 'off'}"
     )
 
 
@@ -290,20 +299,23 @@ def cmd_status():
 
 def cmd_run():
     purifier, token = connect()
-    points, poll, step_down = load_curve()
+    points, poll, step_down, sound = load_curve()
     controller = Controller(step_down)
-    log(f"started at {purifier.ip}: curve={points} poll={poll}s step_down_after={step_down}s")
+    log(
+        f"started at {purifier.ip}: curve={points} poll={poll}s "
+        f"step_down_after={step_down}s sound={'on' if sound else 'off'}"
+    )
     last_msgs = None
     failures = 0
 
     while True:
         try:
-            points, poll, controller.step_down_after = load_curve()
+            points, poll, controller.step_down_after, sound = load_curve()
         except Exception as e:
             log(f"curve.toml invalid, keeping previous curve: {e}")
 
         try:
-            msgs = tick(purifier, controller, points, time.monotonic())
+            msgs = tick(purifier, controller, points, time.monotonic(), sound=sound)
             failures = 0
         except Exception as e:
             failures += 1

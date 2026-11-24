@@ -1,0 +1,13 @@
+[project]
+name = "purifier-curve"
+version = "0.1.0"
+description = "Custom PM2.5 fan curve for the Xiaomi Smart Air Purifier 4 Compact, over local Wi-Fi"
+requires-python = ">=3.13"
+dependencies = [
+    "python-miio==0.5.12",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]

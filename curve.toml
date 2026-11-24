@@ -1,0 +1,19 @@
+# Your fan curve. Edit and save: changes apply within one poll, no restart needed.
+#
+# points = [PM2.5 in µg/m³, fan level 0-14]
+# Below the first point uses its level, above the last point uses its level,
+# and levels in between are filled in on a straight line.
+points = [
+  [5, 2],
+  [12, 5],
+  [25, 9],
+  [35, 12],
+  [50, 14],
+]
+
+# How often to read the purifier, in seconds.
+poll_seconds = 10
+
+# Speeds up immediately when air gets worse, but only slows down after
+# the lower speed has been called for this many seconds in a row.
+step_down_after_seconds = 60

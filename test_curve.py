@@ -1,4 +1,4 @@
-from purifier_curve import Controller, level_for
+from purifier_curve import Controller, level_for, pick_purifier, set_env_value
 
 POINTS = [(5, 2), (12, 5), (25, 9), (35, 12), (50, 14)]
 
@@ -65,3 +65,36 @@ def test_reset_clears_pending_step_down():
     c.decide(target=3, device_level=8, now=0)
     c.reset()
     assert c.decide(target=3, device_level=8, now=60) is None
+
+
+def test_pick_purifier_returns_device_that_accepts_token_and_matches_model():
+    models = {"10.0.0.2": "yeelink.light.color1", "10.0.0.3": "xiaomi.airp.cpa4m"}
+    assert pick_purifier(["10.0.0.2", "10.0.0.3"], models.__getitem__) == ("10.0.0.3", "xiaomi.airp.cpa4m")
+
+
+def test_pick_purifier_accepts_zhimi_variant():
+    assert pick_purifier(["10.0.0.5"], lambda ip: "zhimi.airp.cpa4") == ("10.0.0.5", "zhimi.airp.cpa4")
+
+
+def test_pick_purifier_skips_devices_that_reject_the_token():
+    def probe(ip):
+        if ip == "10.0.0.2":
+            raise TimeoutError("wrong token")
+        return "xiaomi.airp.cpa4m"
+
+    assert pick_purifier(["10.0.0.2", "10.0.0.3"], probe) == ("10.0.0.3", "xiaomi.airp.cpa4m")
+
+
+def test_pick_purifier_returns_none_when_nothing_matches():
+    assert pick_purifier([], lambda ip: "x") is None
+    assert pick_purifier(["10.0.0.2"], lambda ip: "yeelink.light.color1") is None
+
+
+def test_set_env_value_replaces_existing_line_and_keeps_the_rest():
+    text = "# comment\nPURIFIER_IP=192.168.1.5\nPURIFIER_TOKEN=abc\n"
+    assert set_env_value(text, "PURIFIER_IP", "192.168.1.9") == "# comment\nPURIFIER_IP=192.168.1.9\nPURIFIER_TOKEN=abc\n"
+
+
+def test_set_env_value_appends_when_missing():
+    assert set_env_value("PURIFIER_TOKEN=abc\n", "PURIFIER_IP", "10.0.0.3") == "PURIFIER_TOKEN=abc\nPURIFIER_IP=10.0.0.3\n"
+    assert set_env_value("PURIFIER_TOKEN=abc", "PURIFIER_IP", "10.0.0.3") == "PURIFIER_TOKEN=abc\nPURIFIER_IP=10.0.0.3\n"

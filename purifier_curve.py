@@ -1,10 +1,13 @@
-"""Custom PM2.5 -> fan speed curve for the Xiaomi Smart Air Purifier 4 Compact (zhimi.airp.cpa4).
+"""Custom PM2.5 -> fan speed curve for the Xiaomi Smart Air Purifier 4 Compact
+(xiaomi.airp.cpa4m / zhimi.airp.cpa4).
 
 Usage:
+    uv run purifier_curve.py discover # find the purifier on the network and save its IP to .env
     uv run purifier_curve.py status   # print current readings once
     uv run purifier_curve.py run      # run the curve loop
 """
 
+import socket
 import sys
 import time
 import tomllib
@@ -12,7 +15,7 @@ import warnings
 from datetime import datetime
 from pathlib import Path
 
-warnings.filterwarnings("ignore", category=FutureWarning, module="miio")
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 HERE = Path(__file__).resolve().parent
 ENV_FILE = HERE / ".env"
@@ -22,7 +25,11 @@ MIN_LEVEL, MAX_LEVEL = 0, 14
 MODE_FAVORITE = 2
 MODE_NAMES = {0: "auto", 1: "sleep", 2: "favorite"}
 
-# MIoT spec: home.miot-spec.com/spec/zhimi.airp.cpa4
+SUPPORTED_MODELS = ("xiaomi.airp.cpa4", "zhimi.airp.cpa4")
+MIIO_PORT = 54321
+FAILURES_BEFORE_REDISCOVERY = 3
+
+# MIoT spec (same IDs for both models): home.miot-spec.com/spec/xiaomi.airp.cpa4m
 PROPS = {
     "power": (2, 1),
     "mode": (2, 4),
@@ -73,21 +80,94 @@ def log(msg):
 
 
 def load_env():
+    """Return (ip or None, token). A missing or placeholder IP means "discover it"."""
     if not ENV_FILE.exists():
-        sys.exit(f"Missing {ENV_FILE}. Create it with PURIFIER_IP=... and PURIFIER_TOKEN=...")
+        sys.exit(f"Missing {ENV_FILE}. Copy .env.example to .env and fill in PURIFIER_TOKEN.")
     env = {}
     for line in ENV_FILE.read_text().splitlines():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             key, value = line.split("=", 1)
             env[key.strip()] = value.strip().strip('"').strip("'")
-    missing = [k for k in ("PURIFIER_IP", "PURIFIER_TOKEN") if not env.get(k)]
-    if missing:
-        sys.exit(f"{ENV_FILE} is missing: {', '.join(missing)}")
-    ip, token = env["PURIFIER_IP"], env["PURIFIER_TOKEN"]
-    if "x" in ip.split(".") or not (len(token) == 32 and all(c in "0123456789abcdefABCDEF" for c in token)):
-        sys.exit(f"{ENV_FILE} still has placeholder values. Fill in PURIFIER_IP and the 32-character PURIFIER_TOKEN.")
+    token = env.get("PURIFIER_TOKEN", "")
+    if not (len(token) == 32 and all(c in "0123456789abcdefABCDEF" for c in token)):
+        sys.exit(f"{ENV_FILE} needs the 32-character PURIFIER_TOKEN.")
+    ip = env.get("PURIFIER_IP") or None
+    if ip and "x" in ip.split("."):
+        ip = None
     return ip, token
+
+
+def set_env_value(text, key, value):
+    """Set KEY=value in .env text, replacing an existing line or appending one."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip().startswith(f"{key}="):
+            lines[i] = f"{key}={value}"
+            break
+    else:
+        lines.append(f"{key}={value}")
+    return "\n".join(lines) + "\n"
+
+
+def save_ip(ip):
+    ENV_FILE.write_text(set_env_value(ENV_FILE.read_text(), "PURIFIER_IP", ip))
+
+
+def broadcast_addresses():
+    import netifaces
+
+    addrs = set()
+    for iface in netifaces.interfaces():
+        for a in netifaces.ifaddresses(iface).get(netifaces.AF_INET, []):
+            if a.get("broadcast") and not a["addr"].startswith(("127.", "169.254.")):
+                addrs.add(a["broadcast"])
+    return addrs or {"255.255.255.255"}
+
+
+def find_miio_devices(timeout=3):
+    """IPs of all Xiaomi devices on the local network that answer a miIO hello."""
+    hello = bytes.fromhex("21310020" + "ff" * 28)
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    s.settimeout(0.5)
+    found = []
+    try:
+        for _ in range(3):
+            for addr in broadcast_addresses():
+                s.sendto(hello, (addr, MIIO_PORT))
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            try:
+                data, (ip, _) = s.recvfrom(1024)
+            except socket.timeout:
+                continue
+            if data[:2] == b"\x21\x31" and ip not in found:
+                found.append(ip)
+    finally:
+        s.close()
+    return found
+
+
+def pick_purifier(ips, probe):
+    """First (ip, model) whose device accepts our token (probe succeeds) and is a supported model."""
+    for ip in ips:
+        try:
+            model = probe(ip)
+        except Exception:
+            continue
+        if model.startswith(SUPPORTED_MODELS):
+            return ip, model
+    return None
+
+
+def discover(token):
+    from miio import Device
+
+    def probe(ip):
+        return Device(ip, token, timeout=2).send("miIO.info", retry_count=0)["model"]
+
+    return pick_purifier(find_miio_devices(), probe)
 
 
 def load_curve():
@@ -103,6 +183,7 @@ class Purifier:
     def __init__(self, ip, token):
         from miio import Device
 
+        self.ip = ip
         self.dev = Device(ip, token, timeout=5)
 
     def read(self):
@@ -129,12 +210,54 @@ def describe(v):
     )
 
 
+def rediscover(token, old_ip):
+    """Look for the purifier on the network; save and return its IP if found, else None."""
+    found = discover(token)
+    if not found:
+        return None
+    ip, model = found
+    if ip != old_ip:
+        save_ip(ip)
+        log(f"found {model} at {ip} (was {old_ip or 'not set'}); saved to .env")
+    return ip
+
+
+def connect():
+    """Purifier from .env, discovering the IP if it isn't set."""
+    ip, token = load_env()
+    if not ip:
+        ip = rediscover(token, None)
+        if not ip:
+            sys.exit("Purifier not found on the network. Is it powered on and on the same Wi-Fi as this Mac?")
+    return Purifier(ip, token), token
+
+
+def cmd_discover():
+    _, token = load_env()
+    found = discover(token)
+    if not found:
+        sys.exit("Purifier not found on the network. Is it powered on and on the same Wi-Fi as this Mac?")
+    ip, model = found
+    save_ip(ip)
+    print(f"Found {model} at {ip}; saved to .env")
+
+
 def cmd_status():
-    print(describe(Purifier(*load_env()).read()))
+    purifier, token = connect()
+    try:
+        v = purifier.read()
+    except Exception as e:
+        print(f"Cannot reach {purifier.ip} ({e}); searching the network...")
+        ip = rediscover(token, purifier.ip)
+        if not ip:
+            sys.exit("Purifier not found on the network. Is it powered on and on the same Wi-Fi as this Mac?")
+        purifier = Purifier(ip, token)
+        v = purifier.read()
+    print(f"{purifier.ip}: {describe(v)}")
 
 
 def cmd_run():
-    purifier = Purifier(*load_env())
+    purifier, token = connect()
     points, poll, step_down = load_curve()
     controller = Controller(step_down)
     log(f"started: curve={points} poll={poll}s step_down_after={step_down}s")
@@ -152,7 +275,13 @@ def cmd_run():
             failures = 0
         except Exception as e:
             failures += 1
-            log(f"cannot reach purifier ({failures}): {e}")
+            log(f"cannot reach purifier at {purifier.ip} ({failures}): {e}")
+            if failures % FAILURES_BEFORE_REDISCOVERY == 0:
+                ip = rediscover(token, purifier.ip)
+                if ip and ip != purifier.ip:
+                    purifier = Purifier(ip, token)
+                    failures = 0
+                    continue
             time.sleep(min(poll * failures, 120))
             continue
 
@@ -182,7 +311,7 @@ def cmd_run():
 
 
 if __name__ == "__main__":
-    commands = {"status": cmd_status, "run": cmd_run}
+    commands = {"discover": cmd_discover, "status": cmd_status, "run": cmd_run}
     if len(sys.argv) != 2 or sys.argv[1] not in commands:
         sys.exit(__doc__)
     try:

@@ -133,16 +133,17 @@ class FakePurifier:
         self.v["sound"] = on
 
 
-def test_tick_forces_favorite_from_auto_and_applies_curve_immediately():
+def test_tick_in_auto_does_not_change_mode_or_apply_curve():
     dev = FakePurifier(mode=0, pm25=35, level=3)
-    tick(dev, Controller(step_down_after=60), POINTS, now=0)
-    assert dev.calls == [("mode", 2), ("level", 12)]
+    msgs = tick(dev, Controller(step_down_after=60), POINTS, now=0)
+    assert dev.calls == []
+    assert msgs == ["mode is auto; waiting for favorite mode"]
 
 
-def test_tick_forces_favorite_from_sleep_even_when_curve_wants_lower_level():
+def test_tick_in_sleep_does_not_change_mode_or_apply_curve():
     dev = FakePurifier(mode=1, pm25=5, level=10)
     tick(dev, Controller(step_down_after=60), POINTS, now=0)
-    assert dev.calls == [("mode", 2), ("level", 2)]
+    assert dev.calls == []
 
 
 def test_tick_never_turns_purifier_on():
@@ -167,10 +168,30 @@ def test_tick_in_favorite_waits_before_stepping_down():
 
 
 def test_tick_returns_messages_describing_changes():
-    dev = FakePurifier(mode=0, pm25=35, level=3)
+    dev = FakePurifier(mode=2, pm25=35, level=3)
     msgs = tick(dev, Controller(step_down_after=60), POINTS, now=0)
-    assert any("auto" in m and "favorite" in m for m in msgs)
     assert any("3 -> 12" in m for m in msgs)
+
+
+def test_tick_does_not_change_sound_outside_favorite_mode():
+    dev = FakePurifier(mode=0, pm25=35, level=3, sound=True)
+    tick(dev, Controller(step_down_after=60), POINTS, now=0, sound=False)
+    assert dev.calls == []
+
+
+def test_tick_resets_step_down_timer_outside_favorite_mode():
+    dev = FakePurifier(mode=0, pm25=5, level=10)
+    controller = Controller(step_down_after=60)
+    assert controller.decide(target=2, device_level=10, now=0) is None
+
+    tick(dev, controller, POINTS, now=60)
+    dev.v["mode"] = 2
+    tick(dev, controller, POINTS, now=100)
+    assert dev.calls == []
+    tick(dev, controller, POINTS, now=159)
+    assert dev.calls == []
+    tick(dev, controller, POINTS, now=160)
+    assert dev.calls == [("level", 2)]
 
 
 def test_tick_turns_sound_off_before_changing_level():

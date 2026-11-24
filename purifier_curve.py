@@ -229,7 +229,7 @@ class Purifier:
 
 
 def tick(purifier, controller, points, now, sound=False):
-    """One control cycle: enforce the sound setting and Favorite mode, then apply the curve.
+    """One control cycle: apply the sound setting and curve only in Favorite mode.
     Returns log messages.
 
     Never turns the purifier on; turning it off is how you stop the curve.
@@ -239,19 +239,17 @@ def tick(purifier, controller, points, now, sound=False):
         controller.reset()
         return ["purifier is off; waiting for it to be turned on"]
 
+    if v["mode"] != MODE_FAVORITE:
+        controller.reset()
+        return [f"mode is {MODE_NAMES.get(v['mode'], v['mode'])}; waiting for favorite mode"]
+
     msgs = []
     if v["sound"] != sound:
         purifier.set_sound(sound)
         msgs.append(f"sound {'on' if v['sound'] else 'off'} -> {'on' if sound else 'off'}")
 
     target = level_for(v["pm25"], points)
-    if v["mode"] != MODE_FAVORITE:
-        purifier.set_mode(MODE_FAVORITE)
-        msgs.append(f"switched mode {MODE_NAMES.get(v['mode'], v['mode'])} -> favorite")
-        controller.reset()
-        new_level = target if target != v["level"] else None
-    else:
-        new_level = controller.decide(target, v["level"], now)
+    new_level = controller.decide(target, v["level"], now)
 
     if new_level is not None:
         purifier.set_level(new_level)
